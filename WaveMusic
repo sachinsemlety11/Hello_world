@@ -1,0 +1,169 @@
+/*
+       Licensed to the Apache Software Foundation (ASF) under one
+       or more contributor license agreements.  See the NOTICE file
+       distributed with this work for additional information
+       regarding copyright ownership.  The ASF licenses this file
+       to you under the Apache License, Version 2.0 (the
+       "License"); you may not use this file except in compliance
+       with the License.  You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing,
+       software distributed under the License is distributed on an
+       "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+       KIND, either express or implied.  See the License for the
+       specific language governing permissions and limitations
+       under the License.
+ */
+
+package com.phyder.wavemusic;
+
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+
+import com.phyder.wavemusic.events.PublishUpdateEvent;
+import com.phyder.wavemusic.masterGenre.MasterGenre;
+import com.phyder.wavemusic.models.ArtistModel;
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
+import com.squareup.okhttp.ResponseBody;
+
+import org.apache.cordova.CordovaActivity;
+import org.jdeferred.DoneCallback;
+import org.tomahawk.libtomahawk.collection.Collection;
+import org.tomahawk.libtomahawk.collection.CollectionManager;
+import org.tomahawk.libtomahawk.collection.DbCollection;
+import org.tomahawk.libtomahawk.collection.UserCollection;
+import org.tomahawk.tomahawk_android.TomahawkApp;
+import org.tomahawk.tomahawk_android.services.PlaybackService;
+import org.tomahawk.tomahawk_android.services.PlaybackService.PlaybackServiceConnection;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import de.greenrobot.event.EventBus;
+import okio.BufferedSink;
+import okio.BufferedSource;
+import okio.Okio;
+//import retrofit.client.Response;
+
+public class WaveMusicActivity extends CordovaActivity implements PlaybackServiceConnection.PlaybackServiceConnectionListener {
+
+    private static final String TAG = WaveMusicActivity.class.getSimpleName();
+    private PlaybackServiceConnection playbackServiceConnection
+            = new PlaybackServiceConnection(this);
+    private PlaybackService mPlaybackService;
+    private Map<Collection, Boolean> mCollectionLoadingMap = new HashMap<>();
+
+    private UserCollection mUserCollection;
+
+    private int indexingState = 0;
+
+    private Boolean mIsUiInitialized = false;
+    private Boolean mIsLocalFinished = false;
+    String url;
+
+    public boolean isUiInitialized() {
+        return mIsUiInitialized;
+    }
+
+    public void setUiInitialized(boolean uiInitialized) {
+        synchronized (mIsLocalFinished) {
+            mIsUiInitialized = uiInitialized;
+            if (mIsLocalFinished) {
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        loadUrl("javascript:gotoDashboard()");
+                    }
+                });
+
+            }
+        }
+    }
+
+    public UserCollection getUserCollection() {
+        return mUserCollection;
+    }
+
+    public PlaybackService getPlaybackService() {
+        return mPlaybackService;
+    }
+
+    @Override
+    public void setPlaybackService(PlaybackService ps) {
+        mPlaybackService = ps;
+    }
+
+    @Override
+    public void onPlaybackServiceReady() {
+
+    }
+
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+//        new BackgroundTask().execute("");
+
+        EventBus.getDefault().register(this);
+        mUserCollection = (UserCollection) CollectionManager.get()
+                .getCollection(TomahawkApp.PLUGINNAME_USERCOLLECTION);
+        // Mandatory call
+        MasterGenre.getInstance(this);
+
+        mUserCollection.loadMediaItems(false);
+
+
+        for (final Collection collection : CollectionManager.get().getCollections()) {
+            if (collection instanceof DbCollection) {
+                ((DbCollection) collection).isInitializing().then(new DoneCallback<Boolean>() {
+                    @Override
+                    public void onDone(Boolean result) {
+                        Boolean lastResult = mCollectionLoadingMap.get(collection);
+                        mCollectionLoadingMap.put(collection, result);
+                        if (lastResult == null || lastResult != result) {
+//                            Log.d("loadsagar", "loading dashboard");
+                        }
+                    }
+                });
+            }
+        }
+
+        loadUrl(launchUrl);
+    }
+
+    @Override
+    public void onDestroy() {
+        EventBus.getDefault().unregister(this);
+        super.onDestroy();
+    }
+
+    public void onEventMainThread(PublishUpdateEvent event) {
+        if (event.update > 100) {
+            mIsLocalFinished = true;
+        }
+
+        if (mIsUiInitialized) {
+            if (event.update > 100) {
+                loadUrl("javascript:gotoDashboard()");
+            } else {
+                loadUrl("javascript:progressUpdate(" + event.update + ")");
+            }
+        }
+    }
+
+    public void onEventMainThread(WaveMusicThreadPoolExecutor.ThreadPoolCompletedEvent event) {
+        indexingState += event.poolType;
+        if (indexingState % 7 == 0)
+            loadUrl("javascript:onlineIndexingCompleted()");
+    }
+}
